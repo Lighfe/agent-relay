@@ -1,8 +1,8 @@
 # Agent Relay specification
 
-Status: v1 starter. This document defines the protocol and behavior implemented by the local SQLite starter.
+Status: v1 starter. This document defines the protocol and behavior implemented by the local starter.
 
-The starter deliberately uses SQLite so it can run with no external service. Students may port the storage layer to PostgreSQL as a later deployment exercise; the HTTP protocol, credential rules, task lifecycle, and delivery guarantees should remain unchanged.
+The starter uses PostgreSQL, run via Docker Compose for local development. The HTTP protocol, credential rules, task lifecycle, and delivery guarantees are database-independent.
 
 ## Purpose
 
