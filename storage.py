@@ -18,7 +18,6 @@ from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
 from database import (
     Agent,
@@ -156,9 +155,11 @@ def claim_one(agent_id: str, worker_id: str | None) -> dict[str, Any] | None:
         )
         if task is None:
             return None
+        now = utcnow()
         if task.attempt_count >= MAX_ATTEMPTS:
             task.status = "failed"
             task.error = "attempts_exhausted"
+            task.output = None
             task.finished_at = as_db_time(now)
             return None
 
@@ -189,12 +190,6 @@ def claim_one(agent_id: str, worker_id: str | None) -> dict[str, Any] | None:
             "claim_token": claim_token,
             "lease_expires_at": iso_time(lease_expires),
         }
-
-
-def _find_attempt_for_token(db: Session, task_id: str, token: str) -> Attempt | None:
-    return db.scalar(
-        select(Attempt).where(Attempt.task_id == task_id, Attempt.claim_token_hash == secret_hash(token))
-    )
 
 
 def heartbeat(task_id: str, agent_id: str, claim_token: str) -> str:

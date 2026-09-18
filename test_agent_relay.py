@@ -96,6 +96,12 @@ def test_protocol_idempotency_terminal_retry_and_auth_boundary():
         assert forbidden.status_code == 200  # sender is an authorized participant
         no_credentials = client.get("/api/v1/agents")
         assert no_credentials.status_code == 401
+        invalid_credentials = client.get(
+            "/api/v1/agents",
+            headers={"Authorization": "Bearer agt_bogus_invalid_token_value"},
+        )
+        assert invalid_credentials.status_code == 401
+        assert invalid_credentials.json()["error"]["code"] == "invalid_credentials"
         attempts = client.get(f"/api/v1/tasks/{task_id}/attempts", headers=sender_headers).json()
         assert attempts["items"][0]["outcome"] == "completed"
         assert "claim_token" not in attempts["items"][0]

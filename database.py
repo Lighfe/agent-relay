@@ -47,7 +47,7 @@ def utcnow() -> datetime:
 
 
 def as_db_time(value: datetime) -> datetime:
-    """SQLite's DateTime implementation is most portable with naive UTC."""
+    """Timestamps are stored as naive UTC for portability across database backends."""
 
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
@@ -169,6 +169,7 @@ def recover_expired_in_session(db: Session, now: datetime, recipient_id: str | N
         select(Attempt.task_id)
         .where(Attempt.outcome == "processing", Attempt.lease_expires_at <= now_db)
         .distinct()
+        .order_by(Attempt.task_id)
     )
     if recipient_id is not None:
         query = query.join(Task, Task.id == Attempt.task_id).where(Task.recipient_id == recipient_id)
@@ -183,7 +184,8 @@ def recover_expired_in_session(db: Session, now: datetime, recipient_id: str | N
             select(Attempt)
             .where(Attempt.task_id == task_id, Attempt.outcome == "processing", Attempt.lease_expires_at <= now_db)
             .with_for_update()
-        ).scalar_one_or_none()
+            .limit(1)
+        ).scalar()
         if attempt is None:
             continue
         attempt.outcome = "expired"

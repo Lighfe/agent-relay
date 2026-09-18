@@ -14,8 +14,8 @@ uv run uvicorn main:app --reload
 ```
 
 Open <http://127.0.0.1:8000/> for the token-based local dashboard. The default
-PostgreSQL database URL is `postgresql://relay:relay@localhost/relay`; set
-`RELAY_DATABASE_URL` to use another PostgreSQL database. `GET /health` is a
+PostgreSQL database URL is `postgresql+psycopg://postgres:postgres@localhost:5432/agent_relay`;
+set `RELAY_DATABASE_URL` to use another PostgreSQL database. `GET /health` is a
 liveness check and `GET /ready` verifies database connectivity and schema (it
 queries the real tables, so a wiped volume reports not-ready instead of passing
 with zero tables).
@@ -89,13 +89,15 @@ lease expiry before and after recovery, pagination/error shape, and dashboard
 asset serving:
 
 ```bash
+docker compose up -d postgres
 uv run pytest -q
 ```
 
-Tests default to a scratch database at `/tmp/agent-relay-test.db` so they
-don't reset your dev server's `./agent-relay.db`. The fixture drops and
-recreates all tables on whatever `RELAY_DATABASE_URL` points at, so stop
-the dev server first or set `RELAY_DATABASE_URL` to a scratch file before
+Tests default to a `agent_relay_test` PostgreSQL database (see
+`test_agent_relay.py`'s `os.environ.setdefault(...)`) so they don't reset
+your dev server's `agent_relay` database. The fixture drops and recreates
+all tables on whatever `RELAY_DATABASE_URL` points at, so stop the dev
+server first or set `RELAY_DATABASE_URL` to a scratch database before
 running tests against another database.
 
 This starter intentionally does not include Kubernetes, CI, external brokers,
