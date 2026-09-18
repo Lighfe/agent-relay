@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agent_relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RELAY_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/agent_relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run test suite
+        run: uv run pytest -q
+
+      - name: Start app
+        run: |
+          uv run uvicorn main:app --host 0.0.0.0 --port 8000 &
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8000/ready && exit 0
+            sleep 1
+          done
+          echo "app never became ready" >&2
+          exit 1
+
+      - name: Run live integration test
+        run: uv run pytest test_live_integration.py -q
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: docker build -t "agent-relay:${{ steps.tag.outputs.sha }}" .
+
+      # Everything below only runs under `act` (or a self-hosted runner)
+      # with the Docker socket mounted, against an already-running local
+      # `kind` cluster named agent-relay. On GitHub-hosted runners
+      # env.ACT is unset, so these steps no-op instead of hanging against
+      # an unreachable API server.
+      - name: Install kind and kubectl
+        if: ${{ env.ACT == 'true' }}
+        run: |
+          command -v kind >/dev/null || {
+            curl -Lo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
+            chmod +x /usr/local/bin/kind
+          }
+          command -v kubectl >/dev/null || {
+            curl -Lo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.11/bin/linux/amd64/kubectl
+            chmod +x /usr/local/bin/kubectl
+          }
+
+      - name: Verify local cluster access
+        if: ${{ env.ACT == 'true' }}
+        run: |
+          docker info >/dev/null
+          # Regenerate the kubeconfig from the running kind containers
+          # (reachable via the mounted Docker socket) rather than relying
+          # on a separately mounted kubeconfig file.
+          kind export kubeconfig --name agent-relay
+          kubectl --context=kind-agent-relay cluster-info --request-timeout=10s
+
+      - name: Load image into kind
+        if: ${{ env.ACT == 'true' }}
+        run: kind load docker-image "agent-relay:${{ steps.tag.outputs.sha }}" --name agent-relay
+
+      - name: Deploy to kind
+        if: ${{ env.ACT == 'true' }}
+        run: |
+          ./k8s/generate-secret.sh
+          kubectl --context=kind-agent-relay apply -f k8s/postgres-pvc.yaml
+          kubectl --context=kind-agent-relay apply -f k8s/postgres-deployment.yaml
+          kubectl --context=kind-agent-relay apply -f k8s/postgres-service.yaml
+          kubectl --context=kind-agent-relay rollout status deployment/postgres --timeout=120s
+          kubectl --context=kind-agent-relay apply -f k8s/app-service.yaml
+          sed "s/agent-relay:IMAGE_TAG/agent-relay:${{ steps.tag.outputs.sha }}/" k8s/app-deployment.yaml \
+            | kubectl --context=kind-agent-relay apply -f -
+          kubectl --context=kind-agent-relay rollout status deployment/agent-relay --timeout=120s
