@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: agent-relay
+  ports:
+    - port: 8000
+      targetPort: 8000
