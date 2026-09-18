@@ -34,7 +34,7 @@ jobs:
         run: uv sync
 
       - name: Run test suite
-        run: uv run pytest -q
+        run: uv run pytest -q --ignore=test_live_integration.py
 
       - name: Start app
         run: |
@@ -62,11 +62,14 @@ jobs:
       - name: Build image
         run: docker build -t "agent-relay:${{ steps.tag.outputs.sha }}" .
 
-      # Everything below only runs under `act` (or a self-hosted runner)
+      # Everything below is gated on env.ACT, which `act` sets to "true"
+      # automatically. The gate's only current trigger is local `act` runs
       # with the Docker socket mounted, against an already-running local
-      # `kind` cluster named agent-relay. On GitHub-hosted runners
-      # env.ACT is unset, so these steps no-op instead of hanging against
-      # an unreachable API server.
+      # `kind` cluster named agent-relay. A genuine self-hosted-runner
+      # deploy path would need the same env var wired up on that runner;
+      # nothing here sets it. On GitHub-hosted runners env.ACT is unset,
+      # so these steps no-op instead of hanging against an unreachable
+      # API server.
       - name: Install kind and kubectl
         if: ${{ env.ACT == 'true' }}
         run: |

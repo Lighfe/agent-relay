@@ -20,10 +20,10 @@ BASE_URL = os.environ.get("RELAY_BASE_URL", "http://127.0.0.1:8000")
 @pytest.fixture(scope="module")
 def client():
     with httpx.Client(base_url=BASE_URL, timeout=10.0) as client:
-        try:
-            client.get("/ready").raise_for_status()
-        except httpx.HTTPError as exc:
-            pytest.skip(f"relay not ready at {BASE_URL}: {exc}")
+        # No try/except: an unreachable or not-ready server must fail this
+        # run, not silently skip it — this test exists to catch exactly
+        # that kind of broken deployment.
+        client.get("/ready").raise_for_status()
         yield client
 
 
