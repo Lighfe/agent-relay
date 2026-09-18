@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import (
@@ -29,7 +30,6 @@ from database import (
     as_db_time,
     db_session,
     db_time,
-    immediate_transaction,
     iso_time,
     recover_expired,
     recover_expired_in_session,
@@ -74,11 +74,8 @@ def register_agent(name: str, description: str | None) -> dict[str, str]:
 
 def authenticate(token: str) -> Agent:
     token_digest = secret_hash(token)
-    # last_seen_at is an authenticated observation and therefore a write.  Use
-    # the same writer boundary as task operations so concurrent workers do not
-    # hold stale WAL snapshots while trying to update it.
-    with immediate_transaction() as db:
-        agent = db.scalar(select(Agent).where(Agent.token_hash == token_digest))
+    with db_session() as db:
+        agent = db.scalar(select(Agent).where(Agent.token_hash == token_digest).with_for_update())
         if agent is None or not hmac.compare_digest(agent.token_hash, token_digest):
             raise RelayError("invalid_credentials", "The agent token is invalid.", 401)
         agent.last_seen_at = as_db_time(utcnow())
@@ -104,24 +101,11 @@ def list_agents(limit: int, cursor: tuple[datetime, str] | None) -> tuple[list[A
 
 
 def create_task(sender_id: str, recipient_id: str, input_text: str, idempotency_key: str | None) -> dict[str, str]:
-    # Serializing task creation makes the sender-scoped idempotency check and
-    # unique constraint one operation even when two API processes race.
-    with immediate_transaction() as db:
+    with db_session() as db:
         recipient = db.get(Agent, recipient_id)
         if recipient is None:
             raise RelayError("not_found", "Recipient agent not found.", 404)
-        if idempotency_key is not None:
-            existing = db.scalar(
-                select(Task).where(Task.sender_id == sender_id, Task.idempotency_key == idempotency_key)
-            )
-            if existing is not None:
-                if existing.recipient_id != recipient_id or existing.input != input_text:
-                    raise RelayError(
-                        "idempotency_conflict",
-                        "This Idempotency-Key was already used with a different task.",
-                        409,
-                    )
-                return {"task_id": existing.id, "status": existing.status}
+
         task = Task(
             id=new_id("task"),
             sender_id=sender_id,
@@ -136,7 +120,27 @@ def create_task(sender_id: str, recipient_id: str, input_text: str, idempotency_
             finished_at=None,
         )
         db.add(task)
-        db.flush()
+
+        if idempotency_key is None:
+            db.flush()
+            return {"task_id": task.id, "status": task.status}
+
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            existing = db.scalar(
+                select(Task).where(Task.sender_id == sender_id, Task.idempotency_key == idempotency_key)
+            )
+            if existing is None:
+                raise
+            if existing.recipient_id != recipient_id or existing.input != input_text:
+                raise RelayError(
+                    "idempotency_conflict",
+                    "This Idempotency-Key was already used with a different task.",
+                    409,
+                )
+            return {"task_id": existing.id, "status": existing.status}
         return {"task_id": task.id, "status": task.status}
 
 
