@@ -1,9 +1,8 @@
-"""SQLite database setup and durable Agent Relay models.
+"""PostgreSQL database engine and durable Agent Relay models.
 
-This module is intentionally the only place that knows about SQLite connection
-pragmas and its writer-lock transaction.  The rest of the application talks to
-the models through :mod:`storage`; replacing this module with a PostgreSQL
-engine and a row-locking claim transaction is the planned student exercise.
+This module sets up the PostgreSQL connection and defines the SQLAlchemy models
+for agents, tasks, and attempts. The rest of the application talks to the models
+through :mod:`storage`.
 """
 
 from __future__ import annotations
@@ -11,9 +10,9 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Generator
+from typing import Generator
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event, select
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
