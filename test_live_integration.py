@@ -21,9 +21,9 @@ BASE_URL = os.environ.get("RELAY_BASE_URL", "http://127.0.0.1:8000")
 def client():
     with httpx.Client(base_url=BASE_URL, timeout=10.0) as client:
         try:
-            client.get("/health").raise_for_status()
+            client.get("/ready").raise_for_status()
         except httpx.HTTPError as exc:
-            pytest.skip(f"relay not reachable at {BASE_URL}: {exc}")
+            pytest.skip(f"relay not ready at {BASE_URL}: {exc}")
         yield client
 
 
