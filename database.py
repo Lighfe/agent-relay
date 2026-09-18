@@ -156,21 +156,35 @@ def db_session() -> Generator[Session, None, None]:
         db.close()
 
 
-def recover_expired_in_session(db: Session, now: datetime) -> int:
-    """Expire active leases and requeue/fail their tasks within ``db``."""
+def recover_expired_in_session(db: Session, now: datetime, recipient_id: str | None = None) -> int:
+    """Expire active leases and requeue/fail their tasks within ``db``.
+
+    Locks the Task row before the Attempt row for each candidate, matching
+    the lock order used by heartbeat/commit_terminal, so recovery cannot
+    deadlock against them.
+    """
 
     now_db = as_db_time(now)
-    expired = list(
-        db.scalars(
-            select(Attempt)
-            .where(Attempt.outcome == "processing", Attempt.lease_expires_at <= now_db)
-            .order_by(Attempt.lease_expires_at, Attempt.id)
-        )
+    query = (
+        select(Attempt.task_id)
+        .where(Attempt.outcome == "processing", Attempt.lease_expires_at <= now_db)
+        .distinct()
     )
+    if recipient_id is not None:
+        query = query.join(Task, Task.id == Attempt.task_id).where(Task.recipient_id == recipient_id)
+    task_ids = list(db.scalars(query))
+
     count = 0
-    for attempt in expired:
-        task = db.get(Task, attempt.task_id)
-        if task is None or attempt.outcome != "processing":
+    for task_id in task_ids:
+        task = db.execute(select(Task).where(Task.id == task_id).with_for_update()).scalar_one_or_none()
+        if task is None:
+            continue
+        attempt = db.execute(
+            select(Attempt)
+            .where(Attempt.task_id == task_id, Attempt.outcome == "processing", Attempt.lease_expires_at <= now_db)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if attempt is None:
             continue
         attempt.outcome = "expired"
         attempt.finished_at = now_db
