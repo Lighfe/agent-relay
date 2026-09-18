@@ -145,14 +145,15 @@ def create_task(sender_id: str, recipient_id: str, input_text: str, idempotency_
 
 
 def claim_one(agent_id: str, worker_id: str | None) -> dict[str, Any] | None:
-    with immediate_transaction() as db:
+    with db_session() as db:
         now = utcnow()
-        recover_expired_in_session(db, now)
+        recover_expired_in_session(db, now, recipient_id=agent_id)
         task = db.scalar(
             select(Task)
             .where(Task.recipient_id == agent_id, Task.status == "queued")
             .order_by(Task.created_at, Task.id)
             .limit(1)
+            .with_for_update(skip_locked=True)
         )
         if task is None:
             return None
