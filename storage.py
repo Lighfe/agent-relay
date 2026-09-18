@@ -1,9 +1,8 @@
 """Persistence operations for Agent Relay.
 
 Routes and the worker call these functions instead of issuing SQL directly.
-Claim, heartbeat, terminal submission, and recovery each use the same atomic
-SQLite transaction seam, which is the one area students will later replace by
-PostgreSQL row-locking operations.
+Claim, heartbeat, terminal submission, and recovery each lock only the Task/Attempt
+rows they touch, always locking the Task before its Attempt to avoid deadlocks.
 """
 
 from __future__ import annotations
@@ -199,11 +198,15 @@ def _find_attempt_for_token(db: Session, task_id: str, token: str) -> Attempt | 
 
 
 def heartbeat(task_id: str, agent_id: str, claim_token: str) -> str:
-    with immediate_transaction() as db:
-        task = db.get(Task, task_id)
+    with db_session() as db:
+        task = db.execute(select(Task).where(Task.id == task_id).with_for_update()).scalar_one_or_none()
         if task is None or task.recipient_id != agent_id:
             raise RelayError("not_found", "Task not found.", 404)
-        attempt = _find_attempt_for_token(db, task_id, claim_token)
+        attempt = db.execute(
+            select(Attempt)
+            .where(Attempt.task_id == task_id, Attempt.claim_token_hash == secret_hash(claim_token))
+            .with_for_update()
+        ).scalar_one_or_none()
         now = utcnow()
         if (
             attempt is None
@@ -226,11 +229,15 @@ def commit_terminal(
     action: Literal["complete", "fail"],
     value: str,
 ) -> dict[str, str]:
-    with immediate_transaction() as db:
-        task = db.get(Task, task_id)
+    with db_session() as db:
+        task = db.execute(select(Task).where(Task.id == task_id).with_for_update()).scalar_one_or_none()
         if task is None or task.recipient_id != agent_id:
             raise RelayError("not_found", "Task not found.", 404)
-        attempt = _find_attempt_for_token(db, task_id, claim_token)
+        attempt = db.execute(
+            select(Attempt)
+            .where(Attempt.task_id == task_id, Attempt.claim_token_hash == secret_hash(claim_token))
+            .with_for_update()
+        ).scalar_one_or_none()
         if attempt is None:
             raise RelayError("stale_claim", "This claim is no longer active.", 409)
         value_digest = payload_hash(value)
